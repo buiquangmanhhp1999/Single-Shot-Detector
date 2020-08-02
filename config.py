@@ -14,6 +14,9 @@ img_width = 300
 img_channels = 3
 
 classes = 2
-labels = ['background', 'text']
+class_names = ['background', 'id', 'name', 'birth', 'home', 'add', 'image']
 weight_path = 'weight.h5'
 data_path = 'new_data/text_annotated.txt'
+
+labels_output_format = ('class_id', 'xmin', 'ymin', 'xmax', 'ymax')
+
