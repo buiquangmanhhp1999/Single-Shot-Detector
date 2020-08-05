@@ -21,7 +21,8 @@ class DataGenerator:
     - Can perform image transformations for data conversion and data augmentation
     """
 
-    def __init__(self, load_images_into_memory=False, hdf5_dataset_path=None, filenames=None, labels=None, verbose=True):
+    def __init__(self, load_images_into_memory=False, hdf5_dataset_path=None, filenames=None, labels=None,
+                 verbose=True):
         """
         Initialize the data generator. You can either load a dataset directly here in the constructor,
         e.g an HDF5 dataset or you can use xml parser method to read in a dataset
@@ -147,21 +148,25 @@ class DataGenerator:
         # don't resize
         if variable_img_size and not resize:
             hdf5_dataset.attrs.create(name='variable_image_size', data=True, shape=None, dtype=np.bool_)
-        else:   # resize
+        else:  # resize
             hdf5_dataset.attrs.create(name='variable_image_size', data=False, shape=None, dtype=np.bool_)
 
         # create the dataset in which the image will be stored as flattened arrays
-        hdf5_images = hdf5_dataset.create_dataset(name='images', shape=(dataset_size,), maxshape=(None), dtype=h5py.special_dtype(vlen=np.uint8))
+        hdf5_images = hdf5_dataset.create_dataset(name='images', shape=(dataset_size,), maxshape=(None),
+                                                  dtype=h5py.special_dtype(vlen=np.uint8))
 
         # create the dataset that will hold the image height, widths and channels that we need in order to reconstruct the
         # image from the flattened array later
-        hdf5_image_shapes = hdf5_dataset.create_dataset(name='images_shapes', shape=(dataset_size, 3), maxshape=(None, 3),
+        hdf5_image_shapes = hdf5_dataset.create_dataset(name='images_shapes', shape=(dataset_size, 3),
+                                                        maxshape=(None, 3),
                                                         dtype=np.int32)
 
         if self.labels is not None:
             # create the dataset in which the labels will be stored as flattened arrays
-            hdf5_labels = hdf5_dataset.create_dataset(name='labels', shape=(dataset_size,), maxshape=(None,), dtype=h5py.special_dtype(vlen=np.int32))
-            hdf5_label_shapes = hdf5_dataset.create_dataset(name='label_shapes', shape=(dataset_size, 2), maxshape=(None, 2),
+            hdf5_labels = hdf5_dataset.create_dataset(name='labels', shape=(dataset_size,), maxshape=(None,),
+                                                      dtype=h5py.special_dtype(vlen=np.int32))
+            hdf5_label_shapes = hdf5_dataset.create_dataset(name='label_shapes', shape=(dataset_size, 2),
+                                                            maxshape=(None, 2),
                                                             dtype=np.int32)
             hdf5_dataset.attrs.modify(name='has_labels', value=True)
 
@@ -230,12 +235,12 @@ class DataGenerator:
             for i in tr:
                 self.labels.append(labels[i].reshape(label_shapes[i]))
 
-    def generate(self, transformation, batch_size=32, shuffle=True, label_encoder=None, returns=None, keep_images_without_gt=False,
-                 degenerate_box_handling='remove'):
+    def generate(self, transformations, batch_size=32, shuffle=True, label_encoder=None, returns=None,
+                 keep_images_without_gt=False):
         """
         Generates batches of samples and corresponding labels indefinitely
         Can shuffle the samples consistently after each complete pass
-        :param transformation: (list, optional) A list of transformations that will be applied to the images abd labels
+        :param transformations: (list, optional) A list of transformations that will be applied to the images abd labels
                                 in the given order. Each transformation is a callable that takes as input an image and optionally
                                 labels and returns an image and optionally labels in the same format
         :param batch_size: (int, optional) The size of the batches to be generated
@@ -257,9 +262,6 @@ class DataGenerator:
         :param keep_images_without_gt:(bool, optional) If False, images for which there aren't any ground truth boxes before any transformations
                                         have been applied will be removed from the batch. If 'True', such images will beb kept in
                                         the batch
-        :param degenerate_box_handling: How to handle degenerate boxes, which are boxes that have 'xmax <= xmin' and/or 'ymax <= ymin'.
-                                        Degenerate boxes can sometimes be in the dataset, or non-degenerate boxes can become degenerate
-                                        after they were processed by transformation
         :return: The next batch as a tuple of items as defined by the 'returns' arguments
         """
         if returns is None:
@@ -275,14 +277,164 @@ class DataGenerator:
             for i in range(len(object_to_shuffle)):
                 object_to_shuffle[i][:] = shuffled_object
 
-        if degenerate_box_handling == 'remove':
-            box_filter = BoxFilter(check_overlap=False, check_min_area=False, check_degenerate=True, labels_format=self.labels_format)
-
         # Override the labels formats of all the transformation to make
+        if self.labels is not None:
+            for transform in transformations:
+                transform.labels_format = self.labels_format
 
+        # Generate mini batches
+        current = 0
 
+        while True:
+            batch_X, batch_y = [], []
 
+            if current >= self.datasets_size:
+                current = 0
 
+                if shuffle:
+                    object_to_shuffle = [self.dataset_indices]
+                    if self.filenames is not None:
+                        object_to_shuffle.append(self.filenames)
+                    if self.labels is not None:
+                        object_to_shuffle.append(self.labels)
+                    shuffled_object = utils.shuffle(*object_to_shuffle)
+                    for i in range(len(object_to_shuffle)):
+                        object_to_shuffle[i][:] = shuffled_object[i]
 
+            # ==================================================================
+            # Get the image. labels for this batch
+            # ==================================================================
+            # we prioritize our option in the following order:
+            # 1) If we have the images, already loaded in memory, get them from there
+            # 2) Else, if we have an HDF5 dataset, get the images from there
+            # 3) Else, if we have neither of the above, we'll have to load the individual image files from disk
 
+            batch_indices = self.dataset_indices[current:current + batch_size]
+            if self.images is not None:
+                for i in batch_indices:
+                    batch_X.append(self.images[i])
+                if self.filenames is not None:
+                    batch_filenames = self.filenames[current:current + batch_size]
+                else:
+                    batch_filenames = None
+            elif self.hdf5_dataset is not None:
+                for i in batch_indices:
+                    batch_X.append(self.hdf5_dataset['images'][i].reshape(self.hdf5_dataset['image_shape'][i]))
+                if self.filenames is not None:
+                    batch_filenames = self.filenames[current:current + batch_size]
+                else:
+                    batch_filenames = None
+            else:
+                batch_filenames = self.filenames[current: current + batch_size]
+                for filename in batch_filenames:
+                    with Image.open(filename) as image:
+                        batch_X.append(np.array(image, dtype=np.uint8))
 
+            if self.labels is not None:
+                batch_y = deepcopy(self.labels[current:current + batch_size])
+            else:
+                batch_y = None
+
+            if 'original_images' in returns:
+                batch_original_images = deepcopy(batch_X)
+            if 'original_labels' in returns:
+                batch_original_labels = deepcopy(batch_y)
+
+            current += batch_size
+
+            # Perform image transformation
+            batch_items_to_remove = []  # In case the transform we need to remove any images from the batch, store their indices in this list
+            batch_inverse_transforms = []
+
+            for i in range(len(batch_X)):
+                if self.labels is not None:
+                    # convert the labels for this image to an array
+                    batch_y[i] = np.array(batch_y[i])
+
+                    # if this image has no ground truth boxes, maybe we don;t want to keep it in the batch
+                    if (batch_y[i].size == 0) and not keep_images_without_gt:
+                        batch_items_to_remove.append(i)
+                        batch_inverse_transforms.append([])
+                        continue
+
+                # apply any image transformations we may have received
+                if transformations:
+                    inverse_transforms = []
+
+                    for transform in transformations:
+                        if self.labels is not None:
+                            if ('inverse_transform' in returns) and (
+                                    'return_inverter' in inspect.signature(transform).parameters):
+                                batch_X[i], batch_y[i], inverse_transform = transform(batch_X[i], batch_y[i],
+                                                                                      return_inverter=True)
+                                inverse_transforms.append(inverse_transform)
+                            else:
+                                batch_X[i], batch_y[i] = transform(batch_X[i], batch_y[i])
+
+                            if batch_X[i] is None:
+                                batch_items_to_remove.append(i)
+                                batch_inverse_transforms.append([])
+                                continue
+                        else:
+                            if ('inverse_transform' in returns) and (
+                                    'return_inverter' in inspect.signature(transform).parameters):
+                                batch_X[i], inverse_transform = transform(batch_X[i], return_inverter=True)
+                                inverse_transforms.append(inverse_transform)
+                            else:
+                                batch_X[i] = transform(batch_X[i])
+
+                    batch_inverse_transforms.append(inverse_transforms[::-1])
+
+                # Check for degenerate boxes in this batch item
+                if self.labels is not None:
+                    xmin = self.labels_format['xmin']
+                    ymin = self.labels_format['ymin']
+                    xmax = self.labels_format['xmax']
+                    ymax = self.labels_format['ymax']
+
+                    if np.any(batch_y[i][:, xmax] - batch_y[i][:, xmin] <= 0) or np.any(
+                            batch_y[i][:, ymax] - batch_y[i][:, ymin] <= 0):
+                        # remove degenerate box
+                        batch_y[i] = BoxFilter(check_overlap=False, check_min_area=False, check_degenerate=True,
+                                               labels_format=self.labels_format)(batch_y[i])
+                        if (batch_y[i].size == 0) and not keep_images_without_gt:
+                            batch_items_to_remove.append(i)
+
+            # remove any items we might not want to keep from the batch
+            if batch_items_to_remove:
+                for j in sorted(batch_items_to_remove, reverse=True):
+                    batch_X.pop(j)
+                    batch_filenames.pop(j)
+                    if batch_inverse_transforms:
+                        batch_inverse_transforms.pop(j)
+                    if self.labels is not None:
+                        batch_y.pop(j)
+                    if 'original_images' in returns:
+                        batch_original_images.pop(j)
+                    if 'original_labels' in returns and (self.labels is not None):
+                        batch_original_labels.pop(j)
+
+            batch_X = np.array(batch_X)
+
+            # if we have a label encoder, encode our label
+            if label_encoder is not None or self.labels is None:
+                batch_y_encoded = label_encoder(batch_y, diagnostics=True)
+            else:
+                batch_y_encoded = None
+
+            # Compose the output
+            ret = []
+            if 'processed_image' in returns:
+                ret.append(batch_X)
+            if 'encoded_labels' in returns:
+                ret.append(batch_y_encoded)
+            if 'processed_labels' in returns:
+                ret.append(batch_y)
+            if 'filenames' in returns:
+                ret.append(batch_filenames)
+            if 'original_images' in returns:
+                ret.append(batch_original_images)
+            if 'original_labels' in returns:
+                ret.append(batch_original_labels)
+
+            yield ret

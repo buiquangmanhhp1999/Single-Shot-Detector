@@ -6,7 +6,7 @@ import numpy as np
 from SSD.AnchorBoxes import AnchorBoxes
 from SSD.DecodeDetections import DecodeDetections
 from SSD.config import var, aspect_ratios_per_layer, swap_channels, li_steps, subtract_mean, img_width, \
-    img_height, img_channels, classes
+    img_height, img_channels, classes, scales_df
 
 
 def vgg16(inputs, l2_reg=0.0005):
@@ -70,10 +70,8 @@ def input_channel_swap(tensor):
                         tensor[..., swap_channels[3]]], axis=-1)
 
 
-def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, scales=None,
-            aspect_ratios_global=None,
-            two_boxes_for_ar1=True, offsets=None, clip_boxes=False, coords='centroids', normalize_coords=True,
-            divide_by_stddev=None,
+def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_boxes_for_ar1=True, clip_boxes=False,
+            coords='centroids', normalize_coords=True, divide_by_stddev=None,
             confidence_thresh=0.01, iou_threshold=0.45, top_k=200, nms_max_output_size=400):
     """
     Build a Keras model with SSD300 architecture
@@ -83,25 +81,11 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, scal
             side of the input images
     :param max_scale: (float, optional) The largest scaling factor for the size of the anchor boxes as a fraction of the shorted side
             of input images
-    :param scales: (list, optional): A list of floats containing scaling factors per convolutional predictor layer. This list
-            must be one element longer than the number of predictor layers. The first 'k' elements are the scaling factors
-            for the 'k' predictor layers, while the last element is used for the second for aspect ratio 1 in the last predictor
-            layers if 'two_boxes_for_ar1' is 'True'. This additional last scaling factor must be passed either way, even if
-            it is not being used. If a list is passed, this argument overrides 'min_scale' and 'max_scale'. All scaling
-            factors must be greater than zero
-    :param aspect_ratios_global:(list, optional): The list of aspect ratios for which anchor boxes are to be generated. This
-            list is valid for all prediction layers
     :param two_boxes_for_ar1:(bool, optional): Only relevant for aspect ratio list contain 1. Will be ignored otherwise.
             If 'True', two anchor boxes will be generated for aspect ratio 1. The first will be generated using the scaling factor for
             the scaling factor for the respective layer, the second one will be generated using geometric mean of said scaling
             factor and next bigger scaling factor
-    :param offsets: `None` or a list with as many elements as there are predictor layers. The elements can be
-            either floats or tuples of two floats. These numbers represent for each predictor layer how many
-            pixels from the top and left boarders of the image the top-most and left-most anchor box center points should be
-            as a fraction of `steps`. The last bit is important: The offsets are not absolute pixel values, but fractions
-            of the step size specified in the `steps` argument. If the list contains floats, then that value will
-            be used for both spatial dimensions. If the list contains tuples of two floats, then they represent
-            `(vertical_offset, horizontal_offset)`. If no offsets are provided, then they will default to 0.5 of the step size.
+    :param offsets:
     :param clip_boxes: If `True`, clips the anchor box coordinates to stay within image boundaries.
     :param coords: (str, optional): The box coordinate format to be used internally by the model (i.e. this is not the input format
             of the ground truth labels). Can be either 'centroids' for the format `(cx, cy, w, h)` (box center coordinates, width,
@@ -128,17 +112,17 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, scal
     n_classes = classes + 1  # account for the background class
 
     # If no explicit list of scaling factors was passed, compute the list of scaling factors from `min_scale` and `max_scale`
-    if scales is None:
+    if scales_df is None:
         scales = np.linspace(min_scale, max_scale, n_predictor_layers + 1)
     else:
-        scales = scales
+        scales = scales_df
 
     variances = np.array(var)
     # set the aspect ratio for each predictor layer
     if aspect_ratios_per_layer:
         aspect_ratios = aspect_ratios_per_layer
     else:
-        aspect_ratios = [aspect_ratios_global] * n_predictor_layers
+        raise ValueError('Missing aspect_ratios_per_layer value')
 
     if aspect_ratios_per_layer:
         n_boxes = []
@@ -147,22 +131,11 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, scal
                 n_boxes.append(len(ar) + 1)  # + 1 for the second box for aspect ratio 1
             else:
                 n_boxes.append(len(ar))
-    else:
-        # If only a global aspect ratio list was passed, then the number of boxes is the same for each predictor layer
-        if (1 in aspect_ratios_global) & two_boxes_for_ar1:
-            n_boxes = len(aspect_ratios_global) + 1
-        else:
-            n_boxes = len(aspect_ratios_global)
-
-        n_boxes = [n_boxes] * n_predictor_layers
 
     if li_steps is None:
         steps = [None] * n_predictor_layers
     else:
         steps = li_steps
-
-    if offsets is None:
-        offsets = [None] * n_predictor_layers
 
     # Build the network
     x = Input(shape=(img_height, img_width, img_channels))
@@ -177,8 +150,7 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, scal
         x1 = Lambda(input_stddev_normalization, output_shape=(img_height, img_width, img_channels), name='')
 
     if swap_channels:
-        x1 = Lambda(input_channel_swap, output_shape=(img_height, img_width, img_channels), name='input_channel_swap')(
-            x1)
+        x1 = Lambda(input_channel_swap, output_shape=(img_height, img_width, img_channels), name='input_channel_swap')(x1)
 
     base_network, conv4_3 = vgg16(inputs=x1, l2_reg=l2_reg)
 
