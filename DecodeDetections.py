@@ -1,6 +1,4 @@
-import numpy as np
 import tensorflow as tf
-import tensorflow.keras.backend as K
 from tensorflow.keras.layers import InputSpec, Layer
 
 
@@ -43,7 +41,7 @@ class DecodeDetections(Layer):
                     img_height, img_width))
 
         self.confidence_thresh = confidence_thresh
-        self.iou_thresh = iou_thresh
+        self.iou_threshold = iou_thresh
         self.top_k = top_k
         self.normalize_coords = normalize_coords
         self.img_height = img_height
@@ -117,7 +115,7 @@ class DecodeDetections(Layer):
                 # that contains the confidence value for just one class, determined by 'index'
 
                 confidences = tf.expand_dims(batch_item[..., index], axis=-1)
-                class_id = tf.fill(dims=tf.shape(confidences), value=tf.cast(index, name='float'))
+                class_id = tf.fill(dims=tf.shape(confidences), value=tf.cast(index, dtype=tf.float32, name='float'))
                 box_coordinates = batch_item[..., -4:]
 
                 single_class = tf.concat([class_id, confidences, box_coordinates], axis=-1)
@@ -135,11 +133,11 @@ class DecodeDetections(Layer):
                     ymin_nms = tf.expand_dims(single_class[..., -3], axis=-1)
                     xmax_nms = tf.expand_dims(single_class[..., -2], axis=-1)
                     ymax_nms = tf.expand_dims(single_class[..., -1], axis=-1)
-                    boxes = tf.concat(values=[ymin_nms, xmin_nms, ymax_nms, xmax_nms])
+                    boxes = tf.concat(values=[ymin_nms, xmin_nms, ymax_nms, xmax_nms], axis=-1)
 
                     maxima_indices = tf.image.non_max_suppression(boxes=boxes, scores=scores,
                                                                   max_output_size=self.tf_nms_max_output_size,
-                                                                  iou_threshold=self.iou_thresh,
+                                                                  iou_threshold=self.iou_threshold,
                                                                   name='non_maximum_suppression')
 
                     maxima = tf.gather(params=single_class, indices=maxima_indices, axis=0)
@@ -154,8 +152,7 @@ class DecodeDetections(Layer):
                 # Make sure single_class is exactly self.nms_max_output_size elements long
                 padded_single_class = tf.pad(tensor=single_class_nms,
                                              paddings=[[0, self.tf_nms_max_output_size - tf.shape(single_class_nms)[0]],
-                                                       [0, 0]],
-                                             mode='CONSTANT', constant_values=0)
+                                                       [0, 0]], mode='CONSTANT', constant_values=0)
 
                 return padded_single_class
 
@@ -190,8 +187,7 @@ class DecodeDetections(Layer):
 
         # Iterate filter_predictions() over all batch items
         output_tensor = tf.map_fn(fn=lambda x: filter_prediction(x), elems=y_pred, dtype=None, parallel_iterations=128,
-                                  back_prop=False,
-                                  swap_memory=False, infer_shape=True, name='loop_over_batch')
+                                  back_prop=False, swap_memory=False, infer_shape=True, name='loop_over_batch')
 
         return output_tensor
 

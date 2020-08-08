@@ -78,6 +78,12 @@ class AnchorBoxes(layers.Layer):
             self.variances = [0.1, 0.1, 0.2, 0.2]
         else:
             self.variances = variances
+
+        # compute the number of boxes per cell
+        if (1 in aspect_ratios) and two_boxes_for_ar1:
+            self.n_boxes = len(aspect_ratios) + 1
+        else:
+            self.n_boxes = len(aspect_ratios)
         super(AnchorBoxes, self).__init__(**kwargs)
 
     def build(self, input_shape):
@@ -157,7 +163,7 @@ class AnchorBoxes(layers.Layer):
         boxes_tensor[:, :, :, 3] = wh_list[:, 1]
 
         # convert (cx, cy, w, h) to (xmin, xmax, ymin, ymax)
-        boxes_tensor = convert_coordinates(boxes_tensor, start_index=0, conversion='centroid2corners')
+        boxes_tensor = convert_coordinates(boxes_tensor, start_index=0, conversion='centroids2corners')
 
         # If clip boxes is enabled, clip the coordinates to lie within the image boundaries
         if self.clip_boxes:

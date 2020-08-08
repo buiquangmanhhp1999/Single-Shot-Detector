@@ -6,7 +6,7 @@ import numpy as np
 from SSD.AnchorBoxes import AnchorBoxes
 from SSD.DecodeDetections import DecodeDetections
 from SSD.config import var, aspect_ratios_per_layer, swap_channels, li_steps, subtract_mean, img_width, \
-    img_height, img_channels, classes, scales_df
+    img_height, img_channels, classes, scales_df, offsets
 
 
 def vgg16(inputs, l2_reg=0.0005):
@@ -85,7 +85,6 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_
             If 'True', two anchor boxes will be generated for aspect ratio 1. The first will be generated using the scaling factor for
             the scaling factor for the respective layer, the second one will be generated using geometric mean of said scaling
             factor and next bigger scaling factor
-    :param offsets:
     :param clip_boxes: If `True`, clips the anchor box coordinates to stay within image boundaries.
     :param coords: (str, optional): The box coordinate format to be used internally by the model (i.e. this is not the input format
             of the ground truth labels). Can be either 'centroids' for the format `(cx, cy, w, h)` (box center coordinates, width,
@@ -310,11 +309,15 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_
     predictions = Concatenate(axis=2, name='predictions')([mbox_conf_softmax, mbox_loc, mbox_prior_box])
 
     if mode == 'train':
-        model = Model(inputs=x, outputs=predictions)
-    elif mode == 'inference':
+        output_model = Model(inputs=x, outputs=predictions)
+    else:
         decoded_prediction = DecodeDetections(confidence_thresh, iou_threshold, top_k, nms_max_output_size,
                                               coords, normalize_coords, img_height, img_width,
                                               name='decoded_prediction')(predictions)
-        model = Model(inputs=x, outputs=decoded_prediction)
+        output_model = Model(inputs=x, outputs=decoded_prediction)
 
-    return model
+    return output_model
+
+
+
+

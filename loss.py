@@ -31,7 +31,7 @@ def log_loss(y_true, y_pred):
     return softmax_loss
 
 
-def multi_box_loss(y_true, y_pred, alpha=1.0, neg_pos_ratio=3.0, n_neg_min=0):
+def multi_box_loss(y_true, y_pred, alpha=1.0, neg_pos_ratio=3, n_neg_min=0):
     """
 
     :param n_neg_min: the minimum ratio of negative ground truth boxes. This argument can be used to make sure that model
@@ -59,6 +59,7 @@ def multi_box_loss(y_true, y_pred, alpha=1.0, neg_pos_ratio=3.0, n_neg_min=0):
     # create masks for the positive and negative ground truth classes
     negatives = y_true[:, :, 0]     # have shape of (batch_size, num_boxes)
     positives = tf.reduce_max(y_true[:, :, 1:-12], axis=-1)    # have shape of (batch_size, num_boxes)
+    positives = tf.cast(positives, dtype=tf.float32)
 
     # count the number of positive boxes (classes 1 to n) in y_true across the whole batch
     n_positive = tf.reduce_sum(positives)
@@ -72,7 +73,7 @@ def multi_box_loss(y_true, y_pred, alpha=1.0, neg_pos_ratio=3.0, n_neg_min=0):
 
     # compute the number of negative examples we want to account for in the loss
     # we will keep at most 'neg_pos_ratio' times the number of positives in y_true, but at least n_neg_min
-    n_negative_keep = tf.minimum(tf.maximum(neg_pos_ratio * tf.cast(n_positive), n_neg_min), n_neg_losses)
+    n_negative_keep = tf.minimum(tf.maximum(neg_pos_ratio * tf.cast(n_positive, dtype=tf.int32), n_neg_min), n_neg_losses)
 
     # In the case that no negative ground truth boxes at all or the classification loss for all negative boxes is zero,
     # return zero as the 'neg_class_loss'
@@ -94,7 +95,7 @@ def multi_box_loss(y_true, y_pred, alpha=1.0, neg_pos_ratio=3.0, n_neg_min=0):
         # create a mask with these indices, output shape of (batch_size * n_boxes, )
         negatives_keep = tf.scatter_nd(indices=tf.expand_dims(indices, axis=1), updates=tf.ones_like(indices, dtype=tf.int32),
                                        shape=tf.shape(neg_class_loss_all_1D))
-        negatives_keep = tf.reshape(negatives_keep, [batch_size, n_boxes])
+        negatives_keep = tf.cast(tf.reshape(negatives_keep, [batch_size, n_boxes]), dtype=tf.float32)
 
         # apply mask to all other classification losses
         neg_class_loss = tf.reduce_sum(classification_loss * negatives_keep, axis=-1)   # tensor of shape (batch_size, )

@@ -1,11 +1,11 @@
 import numpy as np
 import inspect
-from collections import defaultdict
 import sklearn.utils as utils
 from copy import deepcopy
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from PIL import Image
+import pickle
 import cv2
 import sys
 from tqdm import tqdm, trange
@@ -438,3 +438,35 @@ class DataGenerator:
                 ret.append(batch_original_labels)
 
             yield ret
+
+    def save_dataset(self, filenames_path='filenames.pkl', labels_path=None):
+        """
+        Writes the current `filenames`, `labels` to the specified files.
+        This is particularly useful for large datasets with annotations that are
+        parsed from XML files, which can take quite long. If you'll be using the
+        same dataset repeatedly, you don't want to have to parse the XML label
+        files every time.
+        Arguments:
+            filenames_path (str): The path under which to save the filenames pickle.
+            labels_path (str): The path under which to save the labels pickle.
+        """
+        with open(filenames_path, 'wb') as f:
+            pickle.dump(self.filenames, f)
+        if labels_path is not None:
+            with open(labels_path, 'wb') as f:
+                pickle.dump(self.labels, f)
+
+    def get_dataset(self):
+        """
+        Returns:
+            4-tuple containing lists and/or `None` for the filenames, labels, image IDs,
+            and evaluation-neutrality annotations.
+        """
+        return self.filenames, self.labels
+
+    def get_dataset_size(self):
+        """
+        Returns:
+            The number of images in the dataset.
+        """
+        return self.datasets_size
