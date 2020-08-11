@@ -1,7 +1,7 @@
-from SSD.bounding_box_utils import iou, convert_coordinates
+from bounding_box_utils import iou, convert_coordinates
 import numpy as np
-from SSD.config import img_height, img_width, classes, aspect_ratios_per_layer, li_steps, offsets, var
-from SSD.ssd_encoder.matching_utils import match_multi, match_bipartite
+from config import img_height, img_width, classes, aspect_ratios_per_layer, li_steps, offsets, var
+from ssd_encoder.matching_utils import match_multi, match_bipartite
 
 
 class SSDInputEncoder:
@@ -13,7 +13,7 @@ class SSDInputEncoder:
     to the ground truth boxes via an intersection-over-union threshold criterion
     """
     def __init__(self, predictor_sizes, min_scale=0.1, max_scale=0.9, scales=None, clip_boxes=False, two_boxes_for_ar1=True,
-                 pos_iou_threshold=0.5, neg_iou_limit=0.3, border_pixels='half', normalize_coords=True,
+                 pos_iou_threshold=0.5, neg_iou_limit=0.3, border_pixels='half', normalize_coords=True, coords="centroids",
                  background_id=0):
         """
         :param predictor_sizes:  (list) A list of int-tuples of the format (height, width) containing the output heights and widths
@@ -48,7 +48,6 @@ class SSDInputEncoder:
                 way learning become independent of the input image size
         :param background_id:(int, optional): Determines which class ID is for the background class
         """
-        self.clip_boxes = clip_boxes
         predictor_sizes = np.array(predictor_sizes)
         if predictor_sizes.ndim == 1:
             predictor_sizes = np.expand_dims(predictor_sizes, axis=0)
@@ -77,27 +76,25 @@ class SSDInputEncoder:
         if scales is None:
             self.scales = np.linspace(self.min_scale, self.max_scale, len(self.predictor_sizes) + 1)
         else:   # if a list of scales is given explicitly, we'll use that instead of computing it from min_scale and max_scale
-            self.scales = scales
+            self.scales = np.array(scales)
 
         self.aspect_ratios = aspect_ratios_per_layer
         self.two_boxes_for_ar1 = two_boxes_for_ar1
         self.steps = li_steps
         self.offsets = offsets
         self.clip_boxes = clip_boxes
-        self.variances = var
+        self.variances = np.array(var)
         self.pos_iou_threshold = pos_iou_threshold
         self.neg_iou_limit = neg_iou_limit
         self.border_pixels = border_pixels
         self.normalize_coords = normalize_coords
         self.background_id = background_id
+        self.coords = coords
 
         # Compute the number of boxes per spatial location for each predictor layer.
         # For example, if a predictor layer has three different aspect ratios. [1.0, 0.5, 2.0] and is supposed to predict two
         # boxes of slightly different size fro aspect ratio 1.0, then that predictor layer predicts a total of four boxes
         # at every spatial location across the feature map
-        if aspect_ratios_per_layer is None:
-            raise ValueError('Missing aspect ratio per layer value')
-
         self.n_boxes = []
         for aspect_ratios in aspect_ratios_per_layer:
             if (1 in aspect_ratios) & two_boxes_for_ar1:
@@ -165,7 +162,7 @@ class SSDInputEncoder:
             # if there is no ground truth for this batch item, there is nothing to match
             if ground_truth_labels[i].size == 0:
                 continue
-            labels = ground_truth_labels[i].astype[np.float]
+            labels = ground_truth_labels[i].astype(np.float)
 
             # check for degenerate ground truth bounding boxes before attempting any computations
             if np.any(labels[:, [xmax]] - labels[:, [xmin]] <= 0) or np.any(labels[:, [ymax]] - labels[:, [ymin]] <= 0):
@@ -176,12 +173,14 @@ class SSDInputEncoder:
                 labels[:, [ymin, ymax]] /= self.img_height
                 labels[:, [xmin, xmax]] /= self.img_width
 
+            if self.coords == "centroids":
+                labels = convert_coordinates(labels, start_index=xmin, conversion='corners2centroids', border_pixels=self.border_pixels)
             classes_one_hot = class_vectors[labels[:, class_id].astype(np.int)]     # The one-hot class IDs for the ground truth boxes of this batch item
             labels_one_hot = np.concatenate([classes_one_hot, labels[:, [xmin, ymin, xmax, ymax]]], axis=-1)
 
             # compute the IoU similarities between all anchor boxes and all ground truth boxes for this batch item
             # This is a matrix of shape (num_ground_truth_boxes, num_anchor_boxes)
-            similarities = iou(labels[:, [xmin, ymin, xmax, ymax]], y_encoded[i, :, -12:-8], coords='corners', mode='outer_product', border_pixels=self.border_pixels)
+            similarities = iou(labels[:, [xmin, ymin, xmax, ymax]], y_encoded[i, :, -12:-8], coords=self.coords, mode='outer_product', border_pixels=self.border_pixels)
 
             # Match each ground truth box to the one anchor box with the highest IoU. This ensures that each ground truth box
             # will have at least one good match
@@ -214,10 +213,11 @@ class SSDInputEncoder:
             neutral_boxes = np.nonzero(max_background_similarities >= self.neg_iou_limit)[0]
             y_encoded[i, neutral_boxes, self.background_id] = 0
 
-        y_encoded[:, :, -12:-8] -= y_encoded[:, :, -8:-4]   # (gt - anchor) for all four coordinates
-        y_encoded[:, :, [-12, -10]] /= np.expand_dims(y_encoded[:, :, -6] - y_encoded[:, :, -8], axis=-1)   # (xmin(gt) - xmin(anchor)) / w(anchor)
-        y_encoded[:, :, [-11, -9]] /= np.expand_dims(y_encoded[:, :, -5] - y_encoded[:, :, -7], axis=-1)    # (ymin(gt) - ymin(anchor)) / h(anchor)
-        y_encoded[:, :, -12:-8] = y_encoded[:, :, -4:]  # (gt - anchor) / size(anchor) / variance for all four coordinates, where 'size' refers to w anh h respectively
+        if self.coords == 'centroids':
+            y_encoded[:, :, [-12, -11]] -= y_encoded[:, :, [-8, -7]]  # cx(gt) - cx(anchor), cy(gt) - cy(anchor)
+            y_encoded[:, :, [-12, -11]] /= y_encoded[:, :, [-6, -5]] * y_encoded[:, :, [-4, -3]]  # (cx(gt) - cx(anchor)) / w(anchor) / cx_variance, (cy(gt) - cy(anchor)) / h(anchor) / cy_variance
+            y_encoded[:, :, [-10, -9]] /= y_encoded[:, :, [-6, -5]]  # w(gt) / w(anchor), h(gt) / h(anchor)
+            y_encoded[:, :, [-10, -9]] = np.log(y_encoded[:, :, [-10, -9]]) / y_encoded[:, :, [-2, -1]]  # ln(w(gt) / w(anchor)) / w_variance, ln(h(gt) / to w anh h respectively
 
         return y_encoded
 
@@ -240,6 +240,7 @@ class SSDInputEncoder:
         # compute box width and height for each aspect ratio
 
         # The shorter side of the image will be used to compute 'w' and 'h' using 'scale' and 'aspect_ratios'
+
         size = min(self.img_height, self.img_width)
 
         # compute the box width and height for all aspect ratios
@@ -319,7 +320,11 @@ class SSDInputEncoder:
             boxes_tensor[:, :, :, [0, 2]] /= self.img_width
             boxes_tensor[:, :, :, [1, 3]] /= self.img_height
 
-        return boxes_tensor
+        if self.coords == 'centroids':
+            # Convert `(xmin, ymin, xmax, ymax)` back to `(cx, cy, w, h)`.
+            boxes_tensor = convert_coordinates(boxes_tensor, start_index=0, conversion='corners2centroids', border_pixels='half')
+
+        return boxes_tensor, (cy, cx), wh_list, (step_height, step_width), (offset_height, offset_width)
 
     def generate_encoding_template(self, batch_size):
         """

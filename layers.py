@@ -1,12 +1,13 @@
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, ZeroPadding2D, Activation, Lambda, Input, Reshape, Concatenate
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, ZeroPadding2D, Activation, Lambda, Input, Reshape, Concatenate, InputSpec
 from tensorflow.keras.models import Model
 import tensorflow.keras.backend as K
 from tensorflow.keras.regularizers import l2
 import numpy as np
-from SSD.AnchorBoxes import AnchorBoxes
-from SSD.DecodeDetections import DecodeDetections
-from SSD.config import var, aspect_ratios_per_layer, swap_channels, li_steps, subtract_mean, img_width, \
+from AnchorBoxes import AnchorBoxes
+from ssd_decoder.DecodeDetections import DecodeDetections
+from config import var, aspect_ratios_per_layer, swap_channels, li_steps, subtract_mean, img_width, \
     img_height, img_channels, classes, scales_df, offsets
+from tensorflow.keras.layers import Layer
 
 
 def vgg16(inputs, l2_reg=0.0005):
@@ -57,10 +58,6 @@ def input_mean_normalization(tensor):
     return tensor - np.array(subtract_mean)
 
 
-def input_stddev_normalization(tensor, divide_by_stddev):
-    return tensor / np.array(divide_by_stddev)
-
-
 def input_channel_swap(tensor):
     if len(swap_channels) == 3:
         return K.stack([tensor[..., swap_channels[0]], tensor[..., swap_channels[1]], tensor[..., swap_channels[2]]],
@@ -70,9 +67,9 @@ def input_channel_swap(tensor):
                         tensor[..., swap_channels[3]]], axis=-1)
 
 
-def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_boxes_for_ar1=True, clip_boxes=False,
-            coords='centroids', normalize_coords=True, divide_by_stddev=None,
-            confidence_thresh=0.01, iou_threshold=0.45, top_k=200, nms_max_output_size=400):
+def ssd_300(mode='train', l2_reg=0.0005, min_scale=None, max_scale=None, two_boxes_for_ar1=True, clip_boxes=False,
+            coords='centroids', normalize_coords=True, confidence_thresh=0.01, iou_threshold=0.45, top_k=200,
+            nms_max_output_size=400):
     """
     Build a Keras model with SSD300 architecture
     :param mode: Have 3 option: 'training', 'reference', 'inference_fast'
@@ -91,10 +88,6 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_
             and height), 'minmax' for the format `(xmin, xmax, ymin, ymax)`, or 'corners' for the format `(xmin, ymin, xmax, ymax)`.
     :param normalize_coords: Set to `True` if the model is supposed to use relative instead of absolute coordinates,
             i.e. if the model predicts box coordinates within [0,1] instead of absolute coordinates.
-    :param divide_by_stddev: `None` or an array-like object of non-zero integers or
-            floating point values of any shape that is broadcast-compatible with the image shape. The image pixel
-            intensity values will be divided by the elements of this array. For example, pass a list
-            of three integers to perform per-channel standard deviation normalization for color images.
     :param confidence_thresh: (float, optional): A float in [0,1), the minimum classification confidence in a specific
             positive class in order to be considered for the non-maximum suppression stage for the respective class.
             A lower value will result in a larger part of the selection process being done by the non-maximum suppression
@@ -108,7 +101,7 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_
     """
     # the number of predictor conv layers in the network is 6 for the original SSD300
     n_predictor_layers = 6
-    n_classes = classes + 1  # account for the background class
+    n_classes = classes  # account for the background class
 
     # If no explicit list of scaling factors was passed, compute the list of scaling factors from `min_scale` and `max_scale`
     if scales_df is None:
@@ -123,33 +116,25 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_
     else:
         raise ValueError('Missing aspect_ratios_per_layer value')
 
-    if aspect_ratios_per_layer:
-        n_boxes = []
-        for ar in aspect_ratios_per_layer:
-            if (1 in ar) & two_boxes_for_ar1:
-                n_boxes.append(len(ar) + 1)  # + 1 for the second box for aspect ratio 1
-            else:
-                n_boxes.append(len(ar))
-
-    if li_steps is None:
-        steps = [None] * n_predictor_layers
-    else:
-        steps = li_steps
+    n_boxes = []
+    for ar in aspect_ratios_per_layer:
+        if (1 in ar) & two_boxes_for_ar1:
+            n_boxes.append(len(ar) + 1)  # + 1 for the second box for aspect ratio 1
+        else:
+            n_boxes.append(len(ar))
+    steps = li_steps
 
     # Build the network
     x = Input(shape=(img_height, img_width, img_channels))
-
     x1 = Lambda(identity_layer, output_shape=(img_height, img_width, img_channels), name='identity_layer')(x)
 
-    if not (subtract_mean is None):
+    if subtract_mean is not None:
         x1 = Lambda(input_mean_normalization, output_shape=(img_height, img_width, img_channels),
-                    name='input_mean_normalization')(x)
-
-    if not (divide_by_stddev is None):
-        x1 = Lambda(input_stddev_normalization, output_shape=(img_height, img_width, img_channels), name='')
+                    name='input_mean_normalization')(x1)
 
     if swap_channels:
-        x1 = Lambda(input_channel_swap, output_shape=(img_height, img_width, img_channels), name='input_channel_swap')(x1)
+        x1 = Lambda(input_channel_swap, output_shape=(img_height, img_width, img_channels), name='input_channel_swap')(
+            x1)
 
     base_network, conv4_3 = vgg16(inputs=x1, l2_reg=l2_reg)
 
@@ -220,37 +205,36 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_
                                               aspect_ratios=aspect_ratios[0],
                                               two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[0],
                                               this_offsets=offsets[0], clip_boxes=clip_boxes,
-                                              variances=variances, coords=coords, normalize_coords=normalize_coords,
+                                              variances=variances, normalize_coords=normalize_coords,
                                               name='conv4_3_norm_mbox_prior_box')(conv4_3_norm_mbox_loc)
     fc7_mbox_prior_box = AnchorBoxes(img_height, img_width, this_scale=scales[1], next_scale=scales[2],
                                      aspect_ratios=aspect_ratios[1],
                                      two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[1], this_offsets=offsets[1],
-                                     clip_boxes=clip_boxes,
-                                     variances=variances, coords=coords, normalize_coords=normalize_coords,
+                                     clip_boxes=clip_boxes, variances=variances, normalize_coords=normalize_coords,
                                      name='fc7_mbox_prior_box')(fc7_mbox_loc)
     conv6_2_mbox_prior_box = AnchorBoxes(img_height, img_width, this_scale=scales[2], next_scale=scales[3],
                                          aspect_ratios=aspect_ratios[2],
                                          two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[2],
                                          this_offsets=offsets[2], clip_boxes=clip_boxes,
-                                         variances=variances, coords=coords, normalize_coords=normalize_coords,
+                                         variances=variances, normalize_coords=normalize_coords,
                                          name='conv6_2_mbox_prior_box')(conv6_2_mbox_loc)
     conv7_2_mbox_prior_box = AnchorBoxes(img_height, img_width, this_scale=scales[3], next_scale=scales[4],
                                          aspect_ratios=aspect_ratios[3],
                                          two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[3],
                                          this_offsets=offsets[3], clip_boxes=clip_boxes,
-                                         variances=variances, coords=coords, normalize_coords=normalize_coords,
+                                         variances=variances, normalize_coords=normalize_coords,
                                          name='conv7_2_mbox_prior_box')(conv7_2_mbox_loc)
     conv8_2_mbox_prior_box = AnchorBoxes(img_height, img_width, this_scale=scales[4], next_scale=scales[5],
                                          aspect_ratios=aspect_ratios[4],
                                          two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[4],
                                          this_offsets=offsets[4], clip_boxes=clip_boxes,
-                                         variances=variances, coords=coords, normalize_coords=normalize_coords,
+                                         variances=variances, normalize_coords=normalize_coords,
                                          name='conv8_2_mbox_prior_box')(conv8_2_mbox_loc)
     conv9_2_mbox_prior_box = AnchorBoxes(img_height, img_width, this_scale=scales[5], next_scale=scales[6],
                                          aspect_ratios=aspect_ratios[5],
                                          two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[5],
                                          this_offsets=offsets[5], clip_boxes=clip_boxes,
-                                         variances=variances, coords=coords, normalize_coords=normalize_coords,
+                                         variances=variances, normalize_coords=normalize_coords,
                                          name='conv9_2_mbox_prior_box')(conv9_2_mbox_loc)
 
     # Reshape the class prediction from (batch, height, width, n_boxes * n_classes) to (batch, height * width * n_boxes, n_classes)
@@ -310,14 +294,10 @@ def ssd_300(mode='training', l2_reg=0.0005, min_scale=None, max_scale=None, two_
 
     if mode == 'train':
         output_model = Model(inputs=x, outputs=predictions)
-    else:
+    elif mode == 'infer':
         decoded_prediction = DecodeDetections(confidence_thresh, iou_threshold, top_k, nms_max_output_size,
                                               coords, normalize_coords, img_height, img_width,
                                               name='decoded_prediction')(predictions)
         output_model = Model(inputs=x, outputs=decoded_prediction)
 
     return output_model
-
-
-
-

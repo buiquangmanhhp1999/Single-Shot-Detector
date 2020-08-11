@@ -12,16 +12,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from __future__ import division
 import numpy as np
 import cv2
 import inspect
 
-from SSD.augmentation.object_detection_2d_photometric_ops import ConvertColor, ConvertDataType, ConvertTo3Channels, \
+from augmentation.object_detection_2d_photometric_ops import ConvertColor, ConvertDataType, ConvertTo3Channels, \
     RandomBrightness, RandomContrast, RandomHue, RandomSaturation, RandomChannelSwap
-from SSD.augmentation.object_detection_2d_patch_sampling_ops import PatchCoordinateGenerator, RandomPatch, RandomPatchInf
-from SSD.augmentation.object_detection_2d_geometric_ops import ResizeRandomInterp, RandomFlip
-from SSD.augmentation.object_detection_2d_image_boxes_validation_utils import BoundGenerator, BoxFilter, ImageValidator
+from augmentation.object_detection_2d_patch_sampling_ops import PatchCoordinateGenerator, RandomPatch, RandomPatchInf
+from augmentation.object_detection_2d_geometric_ops import ResizeRandomInterp, RandomFlip
+from augmentation.object_detection_2d_image_boxes_validation_utils import BoundGenerator, BoxFilter, ImageValidator
 
 
 class SSDRandomCrop:

@@ -22,7 +22,7 @@ import numpy as np
 import cv2
 import random
 
-from SSD.augmentation.object_detection_2d_image_boxes_validation_utils import BoxFilter, ImageValidator
+from augmentation.object_detection_2d_image_boxes_validation_utils import BoxFilter, ImageValidator
 
 
 class Resize:

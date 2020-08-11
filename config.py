@@ -26,14 +26,11 @@ offsets = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
 #  factors must be greater than zero
 scales_df = [0.07, 0.15, 0.33, 0.51, 0.69, 0.87, 1.05]
 
-
 img_height = 300
 img_width = 300
 img_channels = 3
 
-classes = 7
-class_names = ['background', 'id', 'name', 'birth', 'home', 'add', 'image']
+classes = 6
+class_names = ['background', 'id', 'name', 'birth', 'home', 'add']
 weight_path = 'weight.h5'
 data_path = 'new_data/text_annotated.txt'
-
-labels_output_format = ('class_id', 'xmin', 'ymin', 'xmax', 'ymax')

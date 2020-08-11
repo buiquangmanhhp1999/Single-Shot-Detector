@@ -1,6 +1,6 @@
 import numpy as np
-import tensorflow.keras.backend as K
-from tensorflow.keras import layers
+import keras.backend as K
+from keras import layers
 from SSD.bounding_box_utils import convert_coordinates
 
 
@@ -27,8 +27,7 @@ class AnchorBoxes(layers.Layer):
     """
 
     def __init__(self, img_height, img_width, this_scale, next_scale, aspect_ratios=None, two_boxes_for_ar1=True,
-                 this_steps=None,
-                 this_offsets=None, clip_boxes=False, variances=None, coords='centroids', normalize_coords=False,
+                 this_steps=None, this_offsets=None, clip_boxes=False, variances=None, normalize_coords=False,
                  **kwargs):
         """
         :param img_height: (int) The height of the input images.
@@ -43,7 +42,6 @@ class AnchorBoxes(layers.Layer):
         :param clip_boxes: (bool, optional): If True, clips the anchor box coordinates to stay within image boundaries
         :param variances: A list of 4 floats > 0. The anchor box offset for each coordinate will be divided by its respective
         variance value
-        :param coords:
         :param normalize_coords:
         :param kwargs:
         """
@@ -64,20 +62,13 @@ class AnchorBoxes(layers.Layer):
         self.this_scale = this_scale
         self.next_scale = next_scale
         self.normalize_coords = normalize_coords
-        self.coords = coords
-
-        if aspect_ratios is None:
-            self.aspect_ratios = [0.5, 1.0, 2.0]
-        else:
-            self.aspect_ratios = aspect_ratios
+        self.aspect_ratios = aspect_ratios
         self.two_boxes_for_ar1 = two_boxes_for_ar1
         self.this_steps = this_steps
         self.this_offsets = this_offsets
         self.clip_boxes = clip_boxes
-        if variances is None:
-            self.variances = [0.1, 0.1, 0.2, 0.2]
-        else:
-            self.variances = variances
+        self.coords = "centroids"
+        self.variances = np.array(variances)
 
         # compute the number of boxes per cell
         if (1 in aspect_ratios) and two_boxes_for_ar1:
@@ -157,10 +148,10 @@ class AnchorBoxes(layers.Layer):
         # dimension will contain (cx, cy, w, h)
         boxes_tensor = np.zeros((feature_map_height, feature_map_width, self.n_boxes, 4))
 
-        boxes_tensor[:, :, :, 0] = np.tile(cx_grid, (1, 1, self.n_boxes))
-        boxes_tensor[:, :, :, 1] = np.tile(cy_grid, (1, 1, self.n_boxes))
-        boxes_tensor[:, :, :, 2] = wh_list[:, 0]
-        boxes_tensor[:, :, :, 3] = wh_list[:, 1]
+        boxes_tensor[:, :, :, 0] = np.tile(cx_grid, (1, 1, self.n_boxes))   # set cx
+        boxes_tensor[:, :, :, 1] = np.tile(cy_grid, (1, 1, self.n_boxes))   # set cy
+        boxes_tensor[:, :, :, 2] = wh_list[:, 0]    # set w
+        boxes_tensor[:, :, :, 3] = wh_list[:, 1]    # set h
 
         # convert (cx, cy, w, h) to (xmin, xmax, ymin, ymax)
         boxes_tensor = convert_coordinates(boxes_tensor, start_index=0, conversion='centroids2corners')
@@ -183,11 +174,9 @@ class AnchorBoxes(layers.Layer):
             boxes_tensor[:, :, :, [1, 3]] /= self.img_height
 
         if self.coords == 'centroids':
-            # convert (xmin, ymin, xmax, ymax) back to (cx, cy, w, h)
-            boxes_tensor = convert_coordinates(boxes_tensor, start_index=0, conversion='corners2centroids')
-        elif self.coords == 'minmax':
-            # convert (xmin, ymin, xmax, ymax) to (xmin, xmax, ymin, ymax)
-            boxes_tensor = convert_coordinates(boxes_tensor, start_index=0, conversion='corners2minmax')
+            # Convert `(xmin, ymin, xmax, ymax)` back to `(cx, cy, w, h)`.
+            boxes_tensor = convert_coordinates(boxes_tensor, start_index=0, conversion='corners2centroids',
+                                               border_pixels='half')
 
         # Create a tensor to contain the variances and append it to `boxes_tensor`. This tensor has the same shape
         # as `boxes_tensor` and simply contains the same 4 variance values for every position in the last axis.
@@ -218,27 +207,10 @@ class AnchorBoxes(layers.Layer):
             'aspect_ratios': list(self.aspect_ratios),
             'two_boxes_for_ar1': self.two_boxes_for_ar1,
             'clip_boxes': self.clip_boxes,
-            'variances': list(self.variances),
             'coords': self.coords,
+            'variances': list(self.variances),
             'normalize_coords': self.normalize_coords
         }
         base_config = super(AnchorBoxes, self).get_config()
 
         return dict(list(base_config.items()) + list(config.items()))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

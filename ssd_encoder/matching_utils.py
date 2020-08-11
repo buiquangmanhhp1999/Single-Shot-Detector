@@ -61,8 +61,3 @@ def match_multi(inputs, threshold):
     ground_truth_indices_thresh_met = ground_truth_indices[anchor_indices_thresh_met]
 
     return ground_truth_indices_thresh_met, anchor_indices_thresh_met
-
-
-
-
-
